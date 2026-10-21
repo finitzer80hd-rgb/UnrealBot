@@ -67,9 +67,12 @@ def call_ai(provider: str, api_key: str, model: str, base_url: str, system: str,
         base_url = base_url.strip().rstrip("/")
         if not base_url:
             raise RuntimeError("Set the LM Studio server URL in Settings.")
+        local_headers = {"Content-Type": "application/json"}
+        if getattr(call_ai, "_lm_token", ""):
+            local_headers["Authorization"] = "Bearer " + call_ai._lm_token
         # If the model name is blank, discover the ID of the currently loaded model.
         if not model.strip():
-            models_req = urllib.request.Request(base_url + "/models", headers={"Content-Type": "application/json"})
+            models_req = urllib.request.Request(base_url + "/models", headers=local_headers)
             try:
                 with urllib.request.urlopen(models_req, timeout=15) as resp:
                     models = json.loads(resp.read().decode("utf-8")).get("data", [])
@@ -87,7 +90,7 @@ def call_ai(provider: str, api_key: str, model: str, base_url: str, system: str,
             "temperature": 0.2,
         }
         url = base_url + "/chat/completions"
-        headers = {"Content-Type": "application/json"}
+        headers = local_headers
     req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=300) as resp:
@@ -142,6 +145,8 @@ class UnrealBotApp(tk.Tk):
         self.api_key = os.environ.get("OPENAI_API_KEY", "")
         self.model = os.environ.get("AI_MODEL", os.environ.get("OPENAI_MODEL", ""))
         self.base_url = os.environ.get("LMSTUDIO_BASE_URL", "http://localhost:1234/v1")
+        self.lm_token = os.environ.get("LM_API_TOKEN", "")
+        call_ai._lm_token = self.lm_token if self.provider == "lmstudio" else ""
         self._build_ui()
         self.after(120, self._poll_events)
 
@@ -232,6 +237,13 @@ class UnrealBotApp(tk.Tk):
             )
             if model is not None:
                 self.model = model.strip()
+            token = simpledialog.askstring(
+                "LM Studio API token (optional)",
+                "Paste the token from Developer > Server Settings > Manage Tokens. Leave blank if authentication is disabled.",
+                initialvalue=self.lm_token, show="*",
+            )
+            if token is not None:
+                self.lm_token = token.strip()
             self.api_key = ""
         else:
             key = simpledialog.askstring("OpenAI API key", "Enter API key (stored only for this running session):", show="*")
@@ -240,7 +252,8 @@ class UnrealBotApp(tk.Tk):
             model = simpledialog.askstring("OpenAI model", "OpenAI model name:", initialvalue=self.model or "gpt-5")
             if model:
                 self.model = model.strip()
-        self._log(f"AI settings updated. Provider: {self.provider}; model: {self.model or '(auto-detect)'}; API key configured: {bool(self.api_key)}")
+        call_ai._lm_token = self.lm_token if self.provider == "lmstudio" else ""
+        self._log(f"AI settings updated. Provider: {self.provider}; model: {self.model or '(auto-detect)'}; LM Studio token configured: {bool(self.lm_token)}; OpenAI key configured: {bool(self.api_key)}")
 
     def open_folder(self):
         if not self.project_root:
