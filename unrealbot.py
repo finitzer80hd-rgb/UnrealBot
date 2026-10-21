@@ -121,7 +121,7 @@ def call_ai(provider: str, api_key: str, model: str, base_url: str, system: str,
                 answer = raw_content.strip()
             elif isinstance(raw_content, list):
                 # Some OpenAI-compatible servers return content as text-part objects.
-                answer = "\\n".join(
+                answer = "\n".join(
                     part.get("text", "") for part in raw_content
                     if isinstance(part, dict) and isinstance(part.get("text"), str)
                 ).strip()
