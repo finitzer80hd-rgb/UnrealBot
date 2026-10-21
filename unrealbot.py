@@ -67,6 +67,11 @@ def call_ai(provider: str, api_key: str, model: str, base_url: str, system: str,
         base_url = base_url.strip().rstrip("/")
         if not base_url:
             raise RuntimeError("Set the LM Studio server URL in Settings.")
+        # LM Studio's OpenAI-compatible API lives under /v1. If the user
+        # enters only the server origin (for example http://localhost:1234),
+        # add /v1 so requests do not accidentally go to /chat/completions.
+        if not base_url.endswith("/v1"):
+            base_url += "/v1"
         local_headers = {"Content-Type": "application/json"}
         if getattr(call_ai, "_lm_token", ""):
             local_headers["Authorization"] = "Bearer " + call_ai._lm_token
