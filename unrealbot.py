@@ -51,37 +51,67 @@ def read_project_context(root: Path) -> str:
     return "".join(chunks) or "[No readable source/config files found.]"
 
 
-def call_openai(api_key: str, model: str, system: str, user: str) -> str:
-    payload = {
-        "model": model,
-        "input": [
-            {"role": "system", "content": [{"type": "input_text", "text": system}]},
-            {"role": "user", "content": [{"type": "input_text", "text": user}]},
-        ],
-    }
-    req = urllib.request.Request(
-        "https://api.openai.com/v1/responses",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        method="POST",
-    )
+def call_ai(provider: str, api_key: str, model: str, base_url: str, system: str, user: str) -> str:
+    """Call either OpenAI Responses API or an OpenAI-compatible local server."""
+    if provider == "openai":
+        payload = {
+            "model": model,
+            "input": [
+                {"role": "system", "content": [{"type": "input_text", "text": system}]},
+                {"role": "user", "content": [{"type": "input_text", "text": user}]},
+            ],
+        }
+        url = "https://api.openai.com/v1/responses"
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    else:
+        base_url = base_url.strip().rstrip("/")
+        if not base_url:
+            raise RuntimeError("Set the LM Studio server URL in Settings.")
+        # If the model name is blank, discover the ID of the currently loaded model.
+        if not model.strip():
+            models_req = urllib.request.Request(base_url + "/models", headers={"Content-Type": "application/json"})
+            try:
+                with urllib.request.urlopen(models_req, timeout=15) as resp:
+                    models = json.loads(resp.read().decode("utf-8")).get("data", [])
+            except Exception as exc:
+                raise RuntimeError(f"Could not reach LM Studio at {base_url}. Start its local server, then try again. Details: {exc}") from exc
+            if not models:
+                raise RuntimeError("LM Studio returned no models. Load your Qwen model and ensure the local server is running.")
+            model = models[0].get("id", "")
+        payload = {
+            "model": model.strip(),
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "temperature": 0.2,
+        }
+        url = base_url + "/chat/completions"
+        headers = {"Content-Type": "application/json"}
+    req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=180) as resp:
+        with urllib.request.urlopen(req, timeout=300) as resp:
             result = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         details = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"OpenAI API returned HTTP {exc.code}: {details[:1500]}") from exc
+        label = "OpenAI" if provider == "openai" else "Local AI server"
+        raise RuntimeError(f"{label} returned HTTP {exc.code}: {details[:1500]}") from exc
     except urllib.error.URLError as exc:
-        raise RuntimeError(f"Could not connect to OpenAI API: {exc}") from exc
-    output = []
-    for item in result.get("output", []):
-        for part in item.get("content", []):
-            if part.get("type") == "output_text":
-                output.append(part.get("text", ""))
-    text = "\n".join(output).strip()
-    if not text:
-        raise RuntimeError("The API returned no text output.")
-    return text
+        label = "OpenAI API" if provider == "openai" else "LM Studio"
+        raise RuntimeError(f"Could not connect to {label}: {exc}") from exc
+    if provider == "openai":
+        output = []
+        for item in result.get("output", []):
+            for part in item.get("content", []):
+                if part.get("type") == "output_text":
+                    output.append(part.get("text", ""))
+        answer = "\n".join(output).strip()
+    else:
+        choices = result.get("choices", [])
+        answer = choices[0].get("message", {}).get("content", "").strip() if choices else ""
+    if not answer:
+        raise RuntimeError("The AI server returned no text output.")
+    return answer
 
 
 SYSTEM_PROMPT = """You are UnrealBot, a careful Unreal Engine 5.x and Visual Studio C++ coding agent.
@@ -108,8 +138,10 @@ class UnrealBotApp(tk.Tk):
         self.proposal: dict | None = None
         self.events: queue.Queue = queue.Queue()
         self.busy = False
+        self.provider = os.environ.get("AI_PROVIDER", "lmstudio").strip().lower()
         self.api_key = os.environ.get("OPENAI_API_KEY", "")
-        self.model = os.environ.get("OPENAI_MODEL", "gpt-5")
+        self.model = os.environ.get("AI_MODEL", os.environ.get("OPENAI_MODEL", ""))
+        self.base_url = os.environ.get("LMSTUDIO_BASE_URL", "http://localhost:1234/v1")
         self._build_ui()
         self.after(120, self._poll_events)
 
@@ -176,13 +208,39 @@ class UnrealBotApp(tk.Tk):
         self.response.insert("end", "Click Ask AI to analyze code, or Build Editor to compile the project.\n")
 
     def settings(self):
-        key = simpledialog.askstring("OpenAI API key", "Enter API key (stored only for this running session):", show="*")
-        if key is not None:
-            self.api_key = key.strip()
-        model = simpledialog.askstring("Model", "OpenAI model name:", initialvalue=self.model)
-        if model:
-            self.model = model.strip()
-        self._log(f"AI settings updated. Model: {self.model}; key configured: {bool(self.api_key)}")
+        provider = simpledialog.askstring(
+            "AI provider", "Provider: enter lmstudio or openai",
+            initialvalue=self.provider,
+        )
+        if provider is None:
+            return
+        provider = provider.strip().lower()
+        if provider not in {"lmstudio", "openai"}:
+            messagebox.showerror(APP_NAME, "Provider must be 'lmstudio' or 'openai'.")
+            return
+        self.provider = provider
+        if self.provider == "lmstudio":
+            url = simpledialog.askstring(
+                "LM Studio server URL", "Local API base URL:",
+                initialvalue=self.base_url,
+            )
+            if url is not None and url.strip():
+                self.base_url = url.strip().rstrip("/")
+            model = simpledialog.askstring(
+                "Local model ID (optional)", "Model ID from LM Studio's /v1/models endpoint. Leave blank to auto-detect the first available model.",
+                initialvalue=self.model if self.model and self.model != "gpt-5" else "",
+            )
+            if model is not None:
+                self.model = model.strip()
+            self.api_key = ""
+        else:
+            key = simpledialog.askstring("OpenAI API key", "Enter API key (stored only for this running session):", show="*")
+            if key is not None:
+                self.api_key = key.strip()
+            model = simpledialog.askstring("OpenAI model", "OpenAI model name:", initialvalue=self.model or "gpt-5")
+            if model:
+                self.model = model.strip()
+        self._log(f"AI settings updated. Provider: {self.provider}; model: {self.model or '(auto-detect)'}; API key configured: {bool(self.api_key)}")
 
     def open_folder(self):
         if not self.project_root:
@@ -223,8 +281,8 @@ class UnrealBotApp(tk.Tk):
         if not self.project_root:
             messagebox.showinfo(APP_NAME, "Choose a .uproject first.")
             return
-        if not self.api_key:
-            messagebox.showinfo(APP_NAME, "Add an OpenAI API key in Settings or set OPENAI_API_KEY before launching.")
+        if self.provider == "openai" and not self.api_key:
+            messagebox.showinfo(APP_NAME, "Choose OpenAI and enter an API key in Settings, or switch to LM Studio for local inference.")
             return
         task = self.prompt.get("1.0", "end").strip()
         if not task:
@@ -237,8 +295,8 @@ class UnrealBotApp(tk.Tk):
         self.response.insert("end", "Analyzing project and preparing a proposal...\n")
         def work():
             context = read_project_context(root)
-            answer = call_openai(self.api_key, self.model, SYSTEM_PROMPT,
-                                 f"PROJECT ROOT: {root}\nPROJECT FILE: {self.project_file.name}\nTASK:\n{task}\n\nPROJECT CONTEXT:\n{context}")
+            answer = call_ai(self.provider, self.api_key, self.model, self.base_url, SYSTEM_PROMPT,
+                             f"PROJECT ROOT: {root}\nPROJECT FILE: {self.project_file.name}\nTASK:\n{task}\n\nPROJECT CONTEXT:\n{context}")
             parsed = self._parse_json(answer)
             self.events.put(("proposal", parsed))
         self._worker(work)
@@ -366,8 +424,8 @@ class UnrealBotApp(tk.Tk):
         if not output:
             messagebox.showinfo(APP_NAME, "Run Build Editor first so there are diagnostics to inspect.")
             return
-        if not self.api_key:
-            messagebox.showinfo(APP_NAME, "Add an OpenAI API key in Settings first.")
+        if self.provider == "openai" and not self.api_key:
+            messagebox.showinfo(APP_NAME, "Add an OpenAI API key in Settings, or switch to LM Studio.")
             return
         self.prompt.delete("1.0", "end")
         self.prompt.insert("1.0", "Diagnose this Unreal build output. Propose the smallest correct source fix, explain the root cause, and list verification steps.\n\nBUILD OUTPUT:\n" + output[-18000:])
@@ -390,7 +448,7 @@ class UnrealBotApp(tk.Tk):
                     if data == 0:
                         self._log("Build succeeded. Runtime/gameplay behavior has not been verified.")
                     else:
-                        self._log("Build failed. Click Ask AI to Diagnose Build after checking API settings.")
+                        self._log("Build failed. Click Ask AI to Diagnose Build to inspect the compiler output.")
         except queue.Empty:
             pass
         self.after(120, self._poll_events)
