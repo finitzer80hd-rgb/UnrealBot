@@ -88,6 +88,7 @@ def call_ai(provider: str, api_key: str, model: str, base_url: str, system: str,
                 {"role": "user", "content": user},
             ],
             "temperature": 0.2,
+            "max_tokens": 8192,
         }
         url = base_url + "/chat/completions"
         headers = local_headers
@@ -111,9 +112,41 @@ def call_ai(provider: str, api_key: str, model: str, base_url: str, system: str,
         answer = "\n".join(output).strip()
     else:
         choices = result.get("choices", [])
-        answer = choices[0].get("message", {}).get("content", "").strip() if choices else ""
+        answer = ""
+        if choices:
+            choice = choices[0] if isinstance(choices[0], dict) else {}
+            message = choice.get("message") or {}
+            raw_content = message.get("content", "")
+            if isinstance(raw_content, str):
+                answer = raw_content.strip()
+            elif isinstance(raw_content, list):
+                # Some OpenAI-compatible servers return content as text-part objects.
+                answer = "\\n".join(
+                    part.get("text", "") for part in raw_content
+                    if isinstance(part, dict) and isinstance(part.get("text"), str)
+                ).strip()
+            # Compatibility with servers that return the legacy completions shape.
+            if not answer and isinstance(choice.get("text"), str):
+                answer = choice["text"].strip()
+            if not answer:
+                finish = choice.get("finish_reason", "unknown")
+                message_fields = ", ".join(sorted(message.keys())) or "none"
+                has_reasoning = bool(message.get("reasoning") or message.get("reasoning_content"))
+                raise RuntimeError(
+                    "LM Studio returned a response but no final text. "
+                    f"finish_reason={finish}; message fields={message_fields}; "
+                    f"reasoning_present={has_reasoning}. "
+                    "In LM Studio, confirm the model is fully loaded, then try again. "
+                    "If it repeats, check the server log and verify the model ID in UnrealBot Settings."
+                )
+        else:
+            response_fields = ", ".join(sorted(result.keys())) or "none"
+            raise RuntimeError(
+                "LM Studio returned JSON without a 'choices' array "
+                f"(response fields: {response_fields}). Check the LM Studio server log and API endpoint."
+            )
     if not answer:
-        raise RuntimeError("The AI server returned no text output.")
+        raise RuntimeError("The AI server returned no text output. Check the server log and confirm the model is fully loaded.")
     return answer
 
 
