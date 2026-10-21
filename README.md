@@ -1,34 +1,36 @@
 # UnrealBot
 
-A Windows desktop coding assistant for Unreal Engine 5.x projects and Visual Studio C++ workflows.
+Windows desktop coding assistant for Unreal Engine 5.x. Supports LM Studio local models (recommended) and OpenAI API.
 
-## What it does
-- Select an Unreal `.uproject` file and inspect source/config files.
-- Ask an AI coding assistant to propose complete-file changes using the OpenAI API.
-- Review proposed changes before applying them; originals are backed up under `.unrealbot_backups/`.
-- Build an Unreal Editor target using the project's local Unreal Build Tool `Build.bat`.
-- Capture build output and ask the assistant to diagnose compiler errors.
-- Open the project folder or solution in Windows Explorer / Visual Studio.
-
-> This is an initial MVP. It does not silently control mouse/keyboard, edit binary assets, or guarantee gameplay correctness. Keep source control or a separate backup. Review all changes before applying.
+## Features
+- Reads Unreal project source/config text files.
+- Proposes code changes for review; backs up existing files before applying approved changes.
+- Builds the Unreal Editor target and captures compiler output for AI diagnosis.
+- Supports local LM Studio via its OpenAI-compatible API. No OpenAI API key is needed in local mode.
 
 ## Requirements
-- Windows 10/11
-- Python 3.10+ (Tkinter included with standard Windows Python installer)
-- Unreal Engine installed locally
-- OpenAI API key for AI features (API billing is separate from ChatGPT)
-- Visual Studio / Visual Studio Build Tools with the C++ workload for Unreal builds
+- Windows 10/11 and Python 3.10+
+- Unreal Engine and Visual Studio C++ workload
+- LM Studio with a model downloaded and loaded (recommended), or an OpenAI API key if using OpenAI mode
 
-## Run
-1. Download/clone this repository.
+## LM Studio setup
+1. Open LM Studio and download/load your Qwen coding model.
+2. Open the Developer tab and start the local server.
+3. The default base URL is `http://localhost:1234/v1`.
+
+## Run UnrealBot
+1. Download/clone the repository.
 2. Double-click `launch.bat` or run `python unrealbot.py`.
-3. Click **Choose .uproject** and select your game project.
-4. Open **Settings** to add your OpenAI API key, or set `OPENAI_API_KEY` in your environment.
-5. Enter a task, then click **Ask AI**. Review the proposal and click **Apply approved changes** only when ready.
-6. Click **Build Editor** to compile. Build output is shown in the log panel.
+3. Click **Choose .uproject** and select your project.
+4. Open **Settings** and enter `lmstudio` for provider. Keep the base URL as `http://localhost:1234/v1`. Leave model ID blank to auto-detect the first model served by LM Studio, or enter the exact model ID from its `/v1/models` endpoint.
+5. Enter your task and click **Ask AI**. Review the proposed changes before using **Apply approved changes**.
+6. Use **Build Editor** to compile and **Ask AI to Diagnose Build** after a failed build.
 
-## Notes
-- Unreal Editor Python automation is a separate optional integration. To enable it, turn on **Python Editor Script Plugin** and **Editor Scripting Utilities** in the Unreal project's Plugins settings, then restart the editor. See [Epic's UE 5.8 editor scripting documentation](https://dev.epicgames.com/documentation/en-us/unreal-engine/scripting-the-unreal-editor-using-python).
-- AI context is limited to text files and capped to avoid sending huge projects. Do not send secrets or proprietary source to an external API unless you are comfortable doing so.
-- Build target defaults to `<ProjectName>Editor`. If your project uses a custom target, update it in the app's Build settings.
-- No API key is stored in the repository. Set it through the app or the `OPENAI_API_KEY` environment variable.
+## Optional OpenAI mode
+In Settings, select provider `openai`, then enter an API key and model. API usage is billed separately from ChatGPT. Never commit keys to GitHub.
+
+## Important
+- Keep source control or a separate backup and review proposed edits before applying them.
+- Local mode sends project context to the local LM Studio server. OpenAI mode sends it to OpenAI.
+- AI changes are not guaranteed correct, and a successful build does not prove gameplay behavior works.
+- Unreal Editor scripting is separate; see [Epic's UE 5.8 Python editor scripting documentation](https://dev.epicgames.com/documentation/en-us/unreal-engine/scripting-the-unreal-editor-using-python).
